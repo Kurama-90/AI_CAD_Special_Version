@@ -1,0 +1,256 @@
+import tkinter as tk
+from tkinter import messagebox, scrolledtext
+import requests
+import json
+import re
+import win32com.client
+import pythoncom
+import time
+import threading
+import io
+import contextlib
+
+# Variables dynamiques
+GEMINI_API_KEY = ""
+SOLIDWORKS_TEMPLATE = ""
+
+def call_gemini(prompt_text):
+    """Appel à l'API Gemini pour générer du code"""
+    global GEMINI_API_KEY
+    headers = {"Content-Type": "application/json"}
+    data = {"contents": [{"parts": [{"text": prompt_text}]}]}
+    try:
+        GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+        resp = requests.post(GEMINI_URL, headers=headers, data=json.dumps(data))
+        resp.raise_for_status()
+        response = resp.json()
+        return response["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        raise Exception(f"Erreur API Gemini: {str(e)}")
+
+def clean_code(code):
+    """Nettoyer le code généré"""
+    code = re.sub(r'```python|```py|```', '', code).strip()
+    return code
+
+def generate_python_code():
+    """Générer du code Python avec Gemini"""
+    global SOLIDWORKS_TEMPLATE
+    prompt = text_prompt.get("1.0", tk.END).strip()
+    if not prompt:
+        messagebox.showwarning("Erreur", "Veuillez entrer un prompt.")
+        return
+
+    try:
+        python_prompt = f"""
+        Tu es un expert en automation SolidWorks avec Python. Génère du code Python qui utilise l'API COM de SolidWorks via win32com.client.
+
+        Le code doit:
+        1. Se connecter à SolidWorks
+        2. Créer une nouvelle pièce
+        3. Créer une esquisse avec une forme simple
+        4. Extruder l'esquisse
+        5. Afficher un message de confirmation
+
+        Utilise uniquement ces méthodes éprouvées:
+        - win32com.client.Dispatch("SldWorks.Application")
+        - swApp.NewDocument(template_path, 0, 0, 0)
+        - swApp.ActiveDoc
+        - swModel.Extension.SelectByID2()
+        - swModel.SketchManager.InsertSketch()
+        - swModel.SketchManager.CreateCornerRectangle()
+        - swModel.FeatureManager.FeatureExtrusion2()
+        - swApp.SendMsgToUser()
+
+        Template à utiliser: {SOLIDWORKS_TEMPLATE}
+
+        Code exemple:
+        import win32com.client
+        import pythoncom
+        import time
+
+        def main():
+            try:
+                pythoncom.CoInitialize()
+                sw_app = win32com.client.Dispatch("SldWorks.Application")
+                sw_app.Visible = True
+                time.sleep(2)
+                
+                # Créer nouvelle pièce
+                template_path = r"{SOLIDWORKS_TEMPLATE}"
+                part_doc = sw_app.NewDocument(template_path, 0, 0, 0)
+                time.sleep(1)
+                
+                sw_model = sw_app.ActiveDoc
+                if sw_model is None:
+                    raise Exception("No active document")
+                
+                # Sélectionner plan devant
+                sw_model.Extension.SelectByID2("Plan devant", "PLANE", 0, 0, 0, False, 0, None, 0)
+                time.sleep(0.5)
+                
+                # Créer esquisse
+                sw_model.SketchManager.InsertSketch(True)
+                time.sleep(0.5)
+                
+                # Dessiner rectangle
+                sw_model.SketchManager.CreateCornerRectangle(0, 0, 0, 0.1, 0.05, 0)
+                time.sleep(0.5)
+                
+                # Sortir esquisse
+                sw_model.SketchManager.InsertSketch(True)
+                time.sleep(0.5)
+                
+                # Sélectionner esquisse
+                sw_model.Extension.SelectByID2("Esquisse1", "SKETCH", 0, 0, 0, False, 0, None, 0)
+                time.sleep(0.5)
+                
+                # Extruder
+                feature = sw_model.FeatureManager.FeatureExtrusion2(
+                    True, False, False, 0, 0, 0.01, 0.01, 
+                    False, False, False, False, 0, 0, 
+                    False, False, False, False, True, True, True, 0, 0, False
+                )
+                
+                sw_app.SendMsgToUser("Pièce créée avec succès!")
+                
+            except Exception as e:
+                print(f"Erreur: {{e}}")
+                import traceback
+                traceback.print_exc()
+            finally:
+                try:
+                    pythoncom.CoUninitialize()
+                except:
+                    pass
+
+        if __name__ == "__main__":
+            main()
+
+        Tâche à réaliser,sans explication et sans SelectByID2 ,juste le code : {prompt}
+        """
+        status_bar.config(text="Appel à Gemini en cours...")
+        root.update()
+        generated = call_gemini(python_prompt)
+        code = clean_code(generated)
+        text_code.delete("1.0", tk.END)
+        text_code.insert("1.0", code)
+        status_bar.config(text="Code généré avec succès via Gemini")
+    except Exception as e:
+        messagebox.showerror("Erreur", f"Erreur avec Gemini: {str(e)}")
+        status_bar.config(text="Erreur lors de la génération")
+
+def execute_automatically():
+    """Exécution automatique: Génère avec Gemini et exécute en mémoire"""
+    if not GEMINI_API_KEY or not SOLIDWORKS_TEMPLATE:
+        messagebox.showwarning("Erreur", "Veuillez remplir GEMINI API Key et SOLIDWORKS Template avant d'exécuter.")
+        return
+
+    auto_exec_btn.config(state=tk.DISABLED, text="Génération et exécution...")
+    status_bar.config(text="Appel à Gemini et exécution en cours...")
+    root.update()
+
+    def auto_execute_thread():
+        try:
+            generate_python_code()
+            time.sleep(1)
+            code = text_code.get("1.0", tk.END).strip()
+            if not code:
+                raise Exception("Aucun code généré par Gemini")
+
+            status_bar.config(text="Exécution du code Gemini...")
+            root.update()
+
+            output_buffer = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(output_buffer), contextlib.redirect_stderr(output_buffer):
+                    pythoncom.CoInitialize()  # Initialisation COM
+                    try:
+                        exec(code, globals())
+                    finally:
+                        pythoncom.CoUninitialize()  # Libération COM
+                output = output_buffer.getvalue()
+                root.after(0, lambda: status_bar.config(text="Exécution réussie"))
+                if output:
+                    messagebox.showinfo("Sortie", output)
+            except Exception as e:
+                error_msg = f"Erreur lors de l'exécution:\n{str(e)}"
+                root.after(0, lambda: messagebox.showerror("Erreur", error_msg))
+                root.after(0, lambda: status_bar.config(text="Erreur d'exécution"))
+            finally:
+                output_buffer.close()
+        except Exception as e:
+            error_msg = f"Erreur: {str(e)}"
+            root.after(0, lambda: messagebox.showerror("Erreur", error_msg))
+            root.after(0, lambda: status_bar.config(text=error_msg))
+        finally:
+            root.after(0, lambda: auto_exec_btn.config(state=tk.NORMAL, text="GÉNÉRER ET EXÉCUTER"))
+
+    thread = threading.Thread(target=auto_execute_thread)
+    thread.daemon = True
+    thread.start()
+
+# Interface Tkinter améliorée
+root = tk.Tk()
+root.title("AI-Solidworks (Version spéciale pour Lenny)")
+root.geometry("700x720")
+
+# Configuration du grid pour un redimensionnement adaptatif
+root.columnconfigure(0, weight=1)
+root.rowconfigure(5, weight=1)
+
+# Cadre pour les paramètres
+settings_frame = tk.LabelFrame(root, text="Paramètres", padx=10, pady=10)
+settings_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=5)
+settings_frame.columnconfigure(1, weight=1)
+
+# GEMINI API Key
+tk.Label(settings_frame, text="GEMINI API Key:").grid(row=0, column=0, sticky="w", pady=(0,5))
+api_key_entry = tk.Entry(settings_frame, width=60, show="*")
+api_key_entry.grid(row=0, column=1, sticky="ew", padx=(10,0), pady=(0,5))
+
+# SOLIDWORKS Template Path
+tk.Label(settings_frame, text="SOLIDWORKS Template Path:").grid(row=1, column=0, sticky="w", pady=(0,5))
+template_entry = tk.Entry(settings_frame, width=60)
+template_entry.grid(row=1, column=1, sticky="ew", padx=(10,0), pady=(0,5))
+
+# Cadre pour le prompt
+prompt_frame = tk.LabelFrame(root, text="Prompt de génération", padx=10, pady=10)
+prompt_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=5)
+prompt_frame.columnconfigure(0, weight=1)
+
+tk.Label(prompt_frame, text="Entrez votre demande:").grid(row=0, column=0, sticky="w", pady=(0,5))
+text_prompt = scrolledtext.ScrolledText(prompt_frame, height=4, width=100)
+text_prompt.grid(row=1, column=0, sticky="ew")
+text_prompt.insert("1.0", "Créer une pièce avec un rectangle extrudé de 20mm")
+
+# Bouton Exécution
+button_frame = tk.Frame(root)
+button_frame.grid(row=2, column=0, pady=10)
+auto_exec_btn = tk.Button(button_frame, text="GÉNÉRER ET EXÉCUTER", command=execute_automatically,
+                          bg="#4CAF50", fg="white", font=("Arial", 12, "bold"), height=2, width=20)
+auto_exec_btn.pack()
+
+# Cadre pour le code généré
+code_frame = tk.LabelFrame(root, text="Code généré", padx=10, pady=10)
+code_frame.grid(row=3, column=0, sticky="nsew", padx=10, pady=5)
+code_frame.columnconfigure(0, weight=1)
+code_frame.rowconfigure(0, weight=1)
+
+text_code = scrolledtext.ScrolledText(code_frame, height=20, width=100, font=("Courier New", 10))
+text_code.grid(row=0, column=0, sticky="nsew")
+
+# Status bar
+status_bar = tk.Label(root, text="Prêt", bd=1, relief=tk.SUNKEN, anchor=tk.W)
+status_bar.grid(row=4, column=0, sticky="ew")
+
+# Mise à jour variables dynamiques
+def update_variables():
+    global GEMINI_API_KEY, SOLIDWORKS_TEMPLATE
+    GEMINI_API_KEY = api_key_entry.get().strip()
+    SOLIDWORKS_TEMPLATE = template_entry.get().strip()
+
+api_key_entry.bind("<FocusOut>", lambda event: update_variables())
+template_entry.bind("<FocusOut>", lambda event: update_variables())
+
+root.mainloop()
